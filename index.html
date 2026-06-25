@@ -478,10 +478,12 @@
 <script>
     const prizes = [];
     let participants = [];
-    const winners = new Set();
+    let nextParticipantId = 0;          // 为每位抽奖者分配唯一 id，避免重名互相牵连
+    const winners = new Set();          // 存中签者的 id
     let isSpinning = false;
     let currentPrize = null;
     let spinInterval = null;
+    let spinIndex = -1;                 // 滚动时最后显示的索引，停止即以此为中签者
     
     const nameDisplay = document.getElementById('name-display');
     const currentNameEl = document.getElementById('current-name');
@@ -530,24 +532,76 @@
         });
     }
 
+    // 判断首行是否为表头：仅当第一列命中常见表头词时才跳过，
+    // 否则（如本仓库的无表头名单）应整表导入，避免漏掉第一个抽奖者。
+    const HEADER_KEYWORDS = ['姓名', '名字', '名称', '人员', '名单', '员工',
+                             'name', 'username', 'member', '员工姓名'];
+    function isLikelyHeader(value) {
+        if (value == null) return false;
+        const s = String(value).trim().toLowerCase();
+        if (s === '' || s.length > 20) return false;
+        return HEADER_KEYWORDS.some(k => s === k.toLowerCase());
+    }
+
     document.getElementById('file-input').addEventListener('change', (e) => {
         const file = e.target.files[0];
         if (!file) return;
-        const reader = new FileReader();
         const status = document.getElementById('file-status');
         status.textContent = '正在读取文件...';
-        
+        status.style.color = '';
+
+        // 读取后用 TextDecoder 解码，CSV 先 UTF-8，失败回退 GB18030（兼容 Excel 另存的 GBK 文件）
+        function decodeBuffer(buffer, fileName) {
+            const isCsv = /\.csv$/i.test(fileName);
+            if (!isCsv) {
+                return new TextDecoder('utf-8').decode(buffer);
+            }
+            const utf8 = new TextDecoder('utf-8', {fatal: true}).decode(buffer);
+            if (!/[�]/.test(utf8)) return utf8;
+            return new TextDecoder('gb18030').decode(buffer);
+        }
+
+        const reader = new FileReader();
         reader.onload = (evt) => {
             try {
-                const data = new Uint8Array(evt.target.result);
-                const workbook = XLSX.read(data, {type: 'array'});
+                const buffer = new Uint8Array(evt.target.result);
+                const workbook = XLSX.read(buffer, {type: 'array'});
                 const firstSheet = workbook.SheetNames[0];
                 const sheet = workbook.Sheets[firstSheet];
                 const json = XLSX.utils.sheet_to_json(sheet, {header: 1});
-                participants = json.slice(1).map(row => ({name: String(row[0]).trim()}))
-                                       .filter(p => p.name);
-                status.textContent = `已成功导入 ${participants.length} 位抽奖者`;
+
+                // 用解码后的文件名重新解析 CSV（SheetJS 默认按 UTF-8，GBK 会乱码）
+                let rows = json;
+                if (/\.csv$/i.test(file.name)) {
+                    const text = decodeBuffer(buffer, file.name);
+                    const wb2 = XLSX.read(text, {type: 'string'});
+                    rows = XLSX.utils.sheet_to_json(wb2.Sheets[wb2.SheetNames[0]], {header: 1});
+                }
+
+                const skipFirst = rows.length > 0 && isLikelyHeader(rows[0][0]);
+                const dataRows = skipFirst ? rows.slice(1) : rows;
+
+                // 重新导入名单时清空旧的中奖记录与名额，避免与上一次抽奖数据混淆
+                participants = [];
+                nextParticipantId = 0;
+                winners.clear();
+                currentPrize = null;
+                prizes.forEach(p => p.remaining = p.total);
+                const winnerTbody = document.querySelector('#winner-table tbody');
+                if (winnerTbody) winnerTbody.innerHTML = '';
+
+                participants = dataRows
+                    .map(row => ({name: String(row[0] == null ? '' : row[0]).trim()}))
+                    .filter(p => p.name !== '')
+                    .map(p => ({id: nextParticipantId++, name: p.name}));
+
+                if (skipFirst) {
+                    status.textContent = `已成功导入 ${participants.length} 位抽奖者（已跳过表头）`;
+                } else {
+                    status.textContent = `已成功导入 ${participants.length} 位抽奖者`;
+                }
                 status.style.color = 'green';
+                renderPrizeTable();
                 updateNameDisplay();
             } catch (error) {
                 status.textContent = '文件解析失败: ' + error.message;
@@ -562,12 +616,12 @@
     });
 
     function updateNameDisplay() {
-        const available = participants.filter(p => !winners.has(p.name));
+        const available = participants.filter(p => !winners.has(p.id));
         if (available.length === 0) {
             currentNameEl.textContent = '所有人员已中奖';
             return;
         }
-        
+
         if (!isSpinning) {
             currentNameEl.textContent = `共 ${available.length} 人待抽奖`;
         }
@@ -585,7 +639,7 @@
             return;
         }
         
-        let available = participants.filter(p => !winners.has(p.name));
+        let available = participants.filter(p => !winners.has(p.id));
         if (available.length === 0) {
             alert('所有抽奖者已中奖，无法继续抽奖');
             return;
@@ -619,11 +673,11 @@
         nameDisplay.classList.add('spinning');
         createParticles();
         
-        const available = participants.filter(p => !winners.has(p.name));
-        
+        const available = participants.filter(p => !winners.has(p.id));
+
         spinInterval = setInterval(() => {
-            const randomIndex = Math.floor(Math.random() * available.length);
-            currentNameEl.textContent = available[randomIndex].name;
+            spinIndex = Math.floor(Math.random() * available.length);
+            currentNameEl.textContent = available[spinIndex].name;
         }, 100);
     }
     
@@ -638,8 +692,13 @@
         drawBtn.disabled = false;
         drawBtn.textContent = '开始抽奖';
         
-        const available = participants.filter(p => !winners.has(p.name));
-        const winnerIndex = Math.floor(Math.random() * available.length);
+        const available = participants.filter(p => !winners.has(p.id));
+
+        // 以滚动时最后显示的人作为中奖者，保证"所见即所得"
+        let winnerIndex = spinIndex;
+        if (winnerIndex < 0 || winnerIndex >= available.length) {
+            winnerIndex = Math.floor(Math.random() * available.length);
+        }
         const winner = available[winnerIndex];
         
         currentNameEl.textContent = winner.name;
@@ -650,8 +709,9 @@
     }
     
     function announceWinner(prize, winner) {
-        winners.add(winner.name);
+        winners.add(winner.id);
         prize.remaining--;
+        spinIndex = -1;
         
         renderWinnerTable([{prize: prize.name, name: winner.name}]);
         renderPrizeTable();
@@ -685,7 +745,8 @@
         modalPrize.textContent = `恭喜获得 ${prize.name}`;
         modalWinner.textContent = winner.name;
         winnerModal.classList.add('active');
-        
+        drawBtn.disabled = true;           // 弹窗打开期间禁止再次开始抽奖
+
         createWinnerEffects();
         updateNameDisplay();
     }
@@ -761,6 +822,7 @@
     
     closeModal.addEventListener('click', () => {
         winnerModal.classList.remove('active');
+        drawBtn.disabled = false;           // 关闭弹窗后恢复抽奖按钮
     });
 
     document.addEventListener('keydown', (e) => {
@@ -770,6 +832,7 @@
                 stopDrawing();
             } else if (winnerModal.classList.contains('active')) {
                 winnerModal.classList.remove('active');
+                drawBtn.disabled = false;   // 空格关弹窗后恢复抽奖按钮
             }
         }
     });
