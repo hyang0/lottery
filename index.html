@@ -369,6 +369,137 @@
             font-size: 18px;
         }
         
+        .prize-image-group {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin: 15px 0;
+            padding: 15px;
+            background: var(--light-color);
+            border: 1px dashed var(--secondary-color);
+            border-radius: 8px;
+        }
+
+        .prize-image-label {
+            font-weight: bold;
+            color: var(--dark-color);
+            flex-shrink: 0;
+        }
+
+        .prize-image-dropzone {
+            position: relative;
+            width: 120px;
+            height: 90px;
+            border: 2px dashed var(--secondary-color);
+            border-radius: 6px;
+            background: #fff;
+            overflow: hidden;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .prize-image-dropzone:hover {
+            background: #eef7f7;
+            border-color: #3db9b0;
+        }
+
+        .prize-image-dropzone.has-image {
+            cursor: default;
+            border-style: solid;
+        }
+
+        .prize-image-placeholder {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            font-size: 12px;
+            color: var(--secondary-color);
+            padding: 8px;
+            line-height: 1.4;
+        }
+
+        .prize-image-placeholder kbd {
+            background: var(--secondary-color);
+            color: #fff;
+            padding: 1px 5px;
+            border-radius: 3px;
+            font-size: 11px;
+            font-family: inherit;
+        }
+
+        .prize-image-preview {
+            position: absolute;
+            inset: 0;
+        }
+
+        .prize-image-preview img {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            background: #fff;
+        }
+
+        .prize-image-remove {
+            position: absolute;
+            top: 2px;
+            right: 2px;
+            width: 22px;
+            height: 22px;
+            border-radius: 50%;
+            border: none;
+            background: rgba(0,0,0,0.55);
+            color: #fff;
+            font-size: 16px;
+            line-height: 1;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0;
+            transition: background 0.2s ease;
+        }
+
+        .prize-image-remove:hover {
+            background: var(--primary-color);
+        }
+
+        table .col-image {
+            width: 70px;
+            text-align: center;
+        }
+
+        .prize-thumb {
+            width: 50px;
+            height: 40px;
+            object-fit: contain;
+            border-radius: 4px;
+            border: 1px solid #eee;
+            vertical-align: middle;
+        }
+
+        .prize-thumb-empty {
+            color: #bbb;
+            font-size: 20px;
+        }
+
+        .winner-prize-image {
+            margin-bottom: 20px;
+            position: relative;
+            z-index: 2;
+        }
+
+        .winner-prize-image img {
+            max-width: 260px;
+            max-height: 220px;
+            border-radius: 16px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.25);
+            border: 4px solid rgba(255, 255, 255, 0.5);
+        }
+
         @media (max-width: 768px) {
             .name-display {
                 width: 300px;
@@ -405,10 +536,25 @@
             <button class="btn" id="add-prize">添加奖品</button>
         </div>
 
+        <div class="prize-image-group">
+            <span class="prize-image-label">奖品图片（可选）：</span>
+            <div class="prize-image-dropzone" id="prize-image-dropzone">
+                <div class="prize-image-preview" id="prize-image-preview" hidden>
+                    <img id="prize-image-preview-img" alt="奖品图片预览">
+                    <button type="button" class="prize-image-remove" id="prize-image-remove" title="移除图片">×</button>
+                </div>
+                <div class="prize-image-placeholder" id="prize-image-placeholder">
+                    截图后按 <kbd>Ctrl/Cmd+V</kbd> 粘贴，或点击选择图片
+                    <input type="file" id="prize-image-input" accept="image/*" hidden>
+                </div>
+            </div>
+        </div>
+
         <h3>奖品列表</h3>
         <table class="prize-list" id="prize-table">
             <thead>
                 <tr>
+                    <th class="col-image">图片</th>
                     <th>奖品名称</th>
                     <th>总数量</th>
                     <th>剩余</th>
@@ -469,6 +615,9 @@
 
 <div class="winner-modal" id="winner-modal">
     <div class="winner-content">
+        <div class="winner-prize-image" id="modal-prize-image" hidden>
+            <img id="modal-prize-img" alt="奖品图片">
+        </div>
         <div class="winner-prize" id="modal-prize"></div>
         <div class="winner-name" id="modal-winner"></div>
         <button class="close-modal" id="close-modal">确定</button>
@@ -492,7 +641,73 @@
     const modalPrize = document.getElementById('modal-prize');
     const modalWinner = document.getElementById('modal-winner');
     const closeModal = document.getElementById('close-modal');
-    
+
+    // 奖品图片相关
+    let pendingPrizeImage = null;      // 待添加到奖品的图片 dataURL，添加后清空
+    const prizeImageDropzone = document.getElementById('prize-image-dropzone');
+    const prizeImagePreview = document.getElementById('prize-image-preview');
+    const prizeImagePreviewImg = document.getElementById('prize-image-preview-img');
+    const prizeImagePlaceholder = document.getElementById('prize-image-placeholder');
+    const prizeImageRemove = document.getElementById('prize-image-remove');
+    const prizeImageInput = document.getElementById('prize-image-input');
+    const modalPrizeImage = document.getElementById('modal-prize-image');
+    const modalPrizeImg = document.getElementById('modal-prize-img');
+
+    // 把一张图片（File 或 Blob）读成 dataURL 并设为待添加图片
+    function setPendingImage(file) {
+        if (!file || !file.type.startsWith('image/')) return;
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            pendingPrizeImage = e.target.result;
+            prizeImagePreviewImg.src = pendingPrizeImage;
+            prizeImagePreview.hidden = false;
+            prizeImagePlaceholder.hidden = true;
+            prizeImageDropzone.classList.add('has-image');
+        };
+        reader.readAsDataURL(file);
+    }
+
+    function clearPendingImage() {
+        pendingPrizeImage = null;
+        prizeImagePreviewImg.src = '';
+        prizeImagePreview.hidden = true;
+        prizeImagePlaceholder.hidden = false;
+        prizeImageDropzone.classList.remove('has-image');
+        prizeImageInput.value = '';
+    }
+
+    // 全局粘贴：仅当剪贴板含图片时拦截，纯文本粘贴放行（不影响输入框）
+    document.addEventListener('paste', (e) => {
+        const items = e.clipboardData && e.clipboardData.items;
+        if (!items) return;
+        for (const item of items) {
+            if (item.type && item.type.startsWith('image/')) {
+                const file = item.getAsFile();
+                if (file) {
+                    e.preventDefault();
+                    setPendingImage(file);
+                }
+                return;
+            }
+        }
+    });
+
+    // 点击 dropzone 的空白区域触发文件选择（已显示图片时不重复触发）
+    prizeImageDropzone.addEventListener('click', (e) => {
+        if (e.target === prizeImageRemove) return;
+        prizeImageInput.click();
+    });
+
+    prizeImageInput.addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (file) setPendingImage(file);
+    });
+
+    prizeImageRemove.addEventListener('click', (e) => {
+        e.stopPropagation();
+        clearPendingImage();
+    });
+
     document.getElementById('add-prize').addEventListener('click', () => {
         const name = document.getElementById('prize-name').value.trim();
         const qty = parseInt(document.getElementById('prize-qty').value, 10);
@@ -504,13 +719,27 @@
         if (existing) {
             existing.total += qty;
             existing.remaining += qty;
+            if (pendingPrizeImage) {
+                existing.image = pendingPrizeImage;   // 同名奖品追加时更新图片
+            }
         } else {
-            prizes.push({name, total: qty, remaining: qty});
+            prizes.push({name, total: qty, remaining: qty, image: pendingPrizeImage || null});
         }
         renderPrizeTable();
         document.getElementById('prize-name').value = '';
         document.getElementById('prize-qty').value = 1;
+        clearPendingImage();
     });
+
+    // 转义 HTML 特殊字符，防止名单/奖品名注入
+    function escapeHtml(s) {
+        return String(s == null ? '' : s)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
 
     function renderPrizeTable() {
         const tbody = document.querySelector('#prize-table tbody');
@@ -521,7 +750,10 @@
         }
         prizes.forEach(p => {
             const tr = document.createElement('tr');
-            tr.innerHTML = `<td>${p.name}</td><td>${p.total}</td><td>${p.remaining}</td>`;
+            const imgCell = p.image
+                ? `<img class="prize-thumb" src="${p.image}" alt="${escapeHtml(p.name)}">`
+                : `<span class="prize-thumb-empty">—</span>`;
+            tr.innerHTML = `<td class="col-image">${imgCell}</td><td>${escapeHtml(p.name)}</td><td>${p.total}</td><td>${p.remaining}</td>`;
             tbody.appendChild(tr);
             if (select && p.remaining > 0) {
                 const option = document.createElement('option');
@@ -744,6 +976,13 @@
         
         modalPrize.textContent = `恭喜获得 ${prize.name}`;
         modalWinner.textContent = winner.name;
+        if (prize.image) {
+            modalPrizeImg.src = prize.image;
+            modalPrizeImage.hidden = false;
+        } else {
+            modalPrizeImg.src = '';
+            modalPrizeImage.hidden = true;
+        }
         winnerModal.classList.add('active');
         drawBtn.disabled = true;           // 弹窗打开期间禁止再次开始抽奖
 
